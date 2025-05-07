@@ -70,7 +70,7 @@ transform = transforms.Compose([
 ])
 
 # --- Dataset and loader ---
-dataset = PairedEyeDataset('resized_train_cropped', transform=transform, max_images=1000, label_file=labels_dict)
+dataset = PairedEyeDataset('resized_train_cropped', transform=transform, max_images=200, label_file=labels_dict)
 loader = DataLoader(dataset, batch_size=4, num_workers=0)
 
 # --- Class weights ---
@@ -93,7 +93,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
 # Training function
 def train():
-    for epoch in range(1):  # Train for more epochs
+    for epoch in range(5):  # Train for more epochs
         model.train()
         running_loss = 0.0
 
@@ -114,9 +114,9 @@ def train():
 
 def evaluate():
     model.eval()
-    all_images = []  # Collecting all images
-    all_preds = []   # Collecting predictions
-    all_labels = []  # Collecting actual labels
+    all_images = []
+    all_preds = []
+    all_labels = []
 
     with torch.no_grad():
         for images, labels in loader:
@@ -124,29 +124,27 @@ def evaluate():
             outputs = model(images)
             preds = torch.argmax(outputs, dim=1)
 
-            all_images.extend(images.cpu().numpy())  # Collect images as well
+            all_images.extend(images.cpu().numpy())
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.numpy())
 
-    # Print label distribution for debug
     print("Label distribution in predictions:")
     print("Actual labels distribution:", Counter(all_labels))
     print("Predicted labels distribution:", Counter(all_preds))
 
     stage_names = ['No DR (0)', 'Mild (1)', 'Moderate (2)', 'Severe NPDR (3)', 'Proliferative (4)']
 
-    # --- Select 1 correctly predicted example per class ---
     selected = {i: None for i in range(len(stage_names))}
     for idx, (img, label, pred) in enumerate(zip(all_images, all_labels, all_preds)):
         if label == pred and selected[label] is None:
             filename = f"{dataset.pairs[idx][0]} & {dataset.pairs[idx][1]}"
             selected[label] = (img, label, pred, filename)
 
-    # --- Create figure for all plots ---
-    fig = plt.figure(figsize=(18, 10))
-    gs = fig.add_gridspec(3, 5)
+    # --- Create figure with better layout ---
+    fig = plt.figure(figsize=(16, 10))
+    gs = fig.add_gridspec(3, 5, height_ratios=[1.2, 1, 1.1])  # 3 rows, 5 columns
 
-    # --- Row 1: Example images (1 per class) ---
+    # --- Row 0: Example Images (1 per class) ---
     for i in range(5):
         if selected[i] is None:
             continue
@@ -159,23 +157,22 @@ def evaluate():
         right = (right + 1) / 2
         combined = np.hstack([left, right])
 
-        ax = fig.add_subplot(gs[0, i])  # One image per column
+        ax = fig.add_subplot(gs[0, i])
         ax.imshow(combined)
-        ax.set_title(f"{fname}\nActual DR Level: {stage_names[true_label]}\nPredicted DR Level: {stage_names[pred_label]}", fontsize=8)
+        ax.set_title(f"{fname}\nActual: {stage_names[true_label]}\nPred: {stage_names[pred_label]}", fontsize=8)
         ax.axis('off')
 
-
-    # --- Row 2: Confusion Matrix ---
+    # --- Row 1: Confusion Matrix (spans 3 columns) ---
     cm = confusion_matrix(all_labels, all_preds, labels=list(range(len(stage_names))))
-    ax_cm = fig.add_subplot(gs[1, :2]) 
+    ax_cm = fig.add_subplot(gs[1, :3])
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=stage_names)
     disp.plot(ax=ax_cm, cmap='Blues', xticks_rotation=45, values_format='d')
     ax_cm.set_title("Confusion Matrix")
 
-    # --- Row 2: Bar Chart ---
+    # --- Row 1: Class Distribution Bar Chart (spans 2 columns) ---
     class_counts = Counter(all_labels)
     class_distribution = [class_counts.get(i, 0) for i in range(len(stage_names))]
-    ax_bar = fig.add_subplot(gs[1, 3:])  # Span last 2 columns
+    ax_bar = fig.add_subplot(gs[1, 3:])
     ax_bar.bar(range(len(stage_names)), class_distribution, color='skyblue')
     ax_bar.set_title("Class Distribution")
     ax_bar.set_ylabel("Sample Count")
@@ -184,6 +181,41 @@ def evaluate():
 
     plt.tight_layout()
     plt.show()
+
+
+    # --- Create a new figure for Detection Rate & False Positive Rate ---
+    fig2 = plt.figure(figsize=(10, 6))
+    ax_rates = fig2.add_subplot(111)  # Single axes
+
+    # Calculate Detection Rate and False Positive Rate
+    detection_rate = []
+    false_positive_rate = []
+    for i in range(len(stage_names)):
+        tp = cm[i, i]
+        fn = np.sum(cm[i, :]) - tp
+        fp = np.sum(cm[:, i]) - tp
+        tn = np.sum(cm) - tp - fn - fp
+        
+        detection_rate.append(tp / (tp + fn) if tp + fn > 0 else 0)
+        false_positive_rate.append(fp / (fp + tn) if fp + tn > 0 else 0)
+
+    # Plot
+    width = 0.35
+    x = np.arange(len(stage_names))
+    ax_rates.bar(x - width/2, detection_rate, width, label='Detection Rate', color='g')
+    ax_rates.bar(x + width/2, false_positive_rate, width, label='False Positive Rate', color='blue')
+
+    ax_rates.set_title("Detection Rate & False Positive Rate")
+    ax_rates.set_xlabel("Classes")
+    ax_rates.set_ylabel("Rates")
+    ax_rates.set_xticks(x)
+    ax_rates.set_xticklabels(stage_names, rotation=45, ha='right')
+    ax_rates.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+
 
 # Main execution
 if __name__ == '__main__':
